@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from transformers import pipeline
+from tasks import analyze_sentiment_task
+from celery.result import AsyncResult
 
 class TextInput(BaseModel):
     text: str
@@ -9,27 +10,39 @@ class SentimentOutput(BaseModel):
     sentiment: str
     score: float
     
+class TaskStatus(BaseModel):
+    task_id: str
+    status: str
+    result: dict | None = None
+    
 app = FastAPI()
 
-@app.on_event("startup")
-async def load_model():
-    global sentiment_analyzer
-    print("model loading...")
-    sentiment_analyzer = pipeline("sentiment-analysis", model="snunlp/KR-FinBert-SC")
-    print("model load done")
-
-@app.post("/predict/sentiment", response_model=SentimentOutput)
-def analyze_sentiment(input_data: TextInput):
-    if sentiment_analyzer is None:
-        return {"sentiment":"Error", "score":0.0}
+@app.post("/predict/sentiment", response_model=TaskStatus)
+def submint_sentiment_analysis(input_data: TextInput):
+    task = analyze_sentiment_task(input_data.text)
     
-    result = sentiment_analyzer(input_data.text)[0]
-    label = result['label']
-    score = result['score']
-    print(label)
-    korean_sentiment = "긍정" if label == "positive" else "부정" if label == "negative" else "중립"
+    return TaskStatus(
+        task_id = task.id,
+        status = task.status,
+        result=None
+    )
     
-    return SentimentOutput(sentiment=korean_sentiment, score=score)
+@app.get("/tasks/{task_id}", response_model = TaskStatus)
+def get_task_status(task_id: str):
+    task = AsyncResult(task_id, app = analyze_sentiment_task.app)
+    
+    if task.status == 'PENDING':
+        result_data = None
+    elif task.state == 'FAILURE':
+        raise HTTPException(status_code=500, detail="Task execution failed.")
+    else:
+        result_data = task.result    
+    
+    return TaskStatus(
+        task_id = task.id,
+        status = task.status,
+        result = result_data
+    )
 
 @app.get("/")
 def home():
