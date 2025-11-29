@@ -19,7 +19,7 @@ app = FastAPI()
 
 @app.post("/predict/sentiment", response_model=TaskStatus)
 def submint_sentiment_analysis(input_data: TextInput):
-    task = analyze_sentiment_task(input_data.text)
+    task = analyze_sentiment_task.delay(input_data.text)
     
     return TaskStatus(
         task_id = task.id,
